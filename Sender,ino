@@ -1,0 +1,146 @@
+#include <WiFi.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
+
+// =========================================================================
+// EMPFÄNGER MAC-ADRESSE (Muss exakt der MAC des Empfänger-ESP32 entsprechen)
+// =========================================================================
+uint8_t receiverMAC[] = {0x00, 0x70, 0x07, 0x1D, 0x6C, 0xF4};
+
+// =========================================================================
+// SENSOR PINS
+// =========================================================================
+const int lichtSensor = 34; // Analoger Pin für den LDR
+const int irPin = 27;       // Digitaler Pin für den IR-Sensor
+
+// =========================================================================
+// RGB LED PINS (COMMON ANODE)
+// =========================================================================
+const int rotPin   = 22;
+const int gruenPin = 21;
+const int blauPin  = 16;
+
+// Zeitsteuerung (Senden alle 30 Sekunden)
+const long intervall = 30000;
+unsigned long letzteMessung = 0;
+bool letzterObjektStatus = false;
+
+// =========================================================================
+// DATENSTRUKTUR (Muss beim Empfänger exakt identisch sein)
+// =========================================================================
+typedef struct {
+  int licht;
+  bool objekt;
+  bool dunkel;
+  unsigned long sleepTime;
+} message_t;
+
+message_t data;
+
+// Funktion zur Steuerung der Common-Anode RGB-LED (invertierte Logik)
+void setColor(int r, int g, int b){
+  analogWrite(rotPin,   255 - r);
+  analogWrite(gruenPin, 255 - g);
+  analogWrite(blauPin,  255 - b);
+}
+
+// Gleitender Mittelwertfilter zur Signalberuhigung des Lichtsensors
+int getFilteredLight() {
+  const int samples = 10;
+  long sum = 0;
+  for(int i = 0; i < samples; i++){
+    sum += analogRead(lichtSensor);
+    delay(5);
+  }
+  return sum / samples;
+}
+
+// Callback-Funktion für den Sendestatus
+void onDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  Serial.print("Send Status: ");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "OK" : "FEHLER");
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // WLAN im Station-Modus aktivieren (wichtig für ESP-NOW)
+  WiFi.mode(WIFI_STA);
+  Serial.print("Sender MAC-Adresse: ");
+  Serial.println(WiFi.macAddress());
+
+  // ESP-NOW initialisieren
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP NOW FEHLER BEI INITIALISIERUNG");
+    return;
+  }
+
+  // Sende-Callback registrieren
+  esp_now_register_send_cb(onDataSent);
+
+  // Peer-Informationen (Empfänger) konfigurieren
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, receiverMAC, 6);
+  peerInfo.channel = 0;
+  peerInfo.encrypt = false;
+
+  // Empfänger als Peer hinzufügen
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+    Serial.println("PEER HINZUFÜGEN FEHLGESCHLAGEN");
+    return;
+  }
+
+  // Pins konfigurieren
+  pinMode(irPin, INPUT);
+  pinMode(rotPin, OUTPUT);
+  pinMode(gruenPin, OUTPUT);
+  pinMode(blauPin, OUTPUT);
+  
+  setColor(0,0,0); // LED beim Start ausschalten
+  Serial.println("ESP NOW SENDER BEREIT");
+}
+
+void loop() {
+  unsigned long jetzt = millis();
+
+  // Abfrage- und Sendeintervall prüfen
+  if(jetzt - letzteMessung >= intervall){
+    letzteMessung = jetzt;
+
+    int licht = getFilteredLight();
+    bool objekt = (digitalRead(irPin) == LOW); // Active-Low Auswertung
+    bool dunkel = (licht >= 200);              // Schwellenwert für Dunkelheit
+
+    Serial.print("Lichtwert: "); Serial.print(licht);
+    Serial.print(" | Objekt erkannt: "); Serial.println(objekt);
+
+    // Visuelles Feedback über die lokale RGB-LED
+    if(dunkel)
+      setColor(0,0,255);      // Blau bei Dunkelheit
+    else
+      setColor(255,255,0);    // Gelb bei Helligkeit
+
+    // Optischer Alarm bei neuer Objekterkennung (2x Blinken)
+    if(objekt && !letzterObjektStatus){
+      for(int i = 0; i < 2; i++){
+        setColor(0,0,0);
+        delay(120);
+        if(dunkel) setColor(0,0,255); else setColor(255,255,0);
+        delay(120);
+      }
+    }
+
+    letzterObjektStatus = objekt;
+
+    // Datenstruktur befüllen
+    data.licht = licht;
+    data.objekt = objekt;
+    data.dunkel = dunkel;
+    data.sleepTime = 30;
+
+    // Paket via ESP-NOW senden
+    esp_err_t result = esp_now_send(receiverMAC, (uint8_t *) &data, sizeof(data));
+    if(result == ESP_OK) Serial.println("Daten erfolgreich gesendet"); else Serial.println("Sende-Fehler");
+  }
+  delay(10);
+}
