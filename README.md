@@ -1,113 +1,82 @@
-#include <WiFi.h>
-#include <esp_now.h>
-#include <WebServer.h>
+# SYT-Projekt: Drahtlose Sensor-Erfassung & Smart-Aktorik via ESP-NOW
 
-const char* ssid = "ESP32-Monitor";
-const char* password = "12345678";
+**Verfasser:** Ali Tanriut, Djordje Stojanovic  
+**Datum:** 26.05.2026
 
-WebServer server(80);
+---
 
-int licht = 0;
-bool objekt = false;
-bool dunkel = false;
-int sleepZeit = 0;
+## 1. Einführung
+In der modernen Automatisierungstechnik und im Internet of Things (IoT) spielt die effiziente, drahtlose Datenübertragung zwischen Kleinstgeräten eine zentrale Rolle. Häufig wird hierfür auf klassische WLAN-Verbindungen über einen zentralen Router zurückgegriffen, was jedoch zu Latenzen und erhöhtem Energieverbrauch führen kann. 
 
-bool autoMode = true;
-bool manualNightMode = false;
+Das von Espressif entwickelte **ESP-NOW-Protokoll** bietet hier eine ressourcenschonende Alternative, da es eine direkte Peer-to-Peer-Kommunikation ohne Accesspoint ermöglicht. Im Rahmen dieses Projekts wird eine Sensor-Aktor-Infrastruktur auf Basis zweier ESP32-Mikrocontroller realisiert, welche Umgebungshelligkeit und Objekterkennung im Raum überwacht und via Webinterface steuerbar macht.
 
-typedef struct {
-  int licht;
-  bool objekt;
-  bool dunkel;
-  unsigned long sleepTime;
-} message_t;
+---
 
-message_t incomingData;
+## 2. Projektbeschreibung
+Es wurde ein verteiltes IoT-System realisiert, bei dem zwei ESP32-Module drahtlos über ESP-NOW miteinander kommunizieren:
 
-void onReceive(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
-  memcpy(&incomingData, data, sizeof(incomingData));
-  licht = incomingData.licht;
-  objekt = incomingData.objekt;
-  dunkel = incomingData.dunkel;
-  sleepZeit = incomingData.sleepTime;
-  Serial.println("DATEN EMPFANGEN");
-}
+* **Die Sender-Station (ESP1):** Erfasst zyklisch die Werte eines Lichtsensors (LDR) sowie eines Infrarot-Näherungssensors (IR). Ein Software-Filter bereinigt das Signal des Lichtsensors. Zudem steuert der Sender direkt eine RGB-LED zur lokalen Statusanzeige an.
+* **Die Empfänger-Station (ESP2):** Empfängt die strukturierten Sensordaten, verarbeitet diese und stellt die Messwerte über ein responsives HTTP-Webinterface zur Verfügung. Das Webinterface bietet neben der Live-Überwachung einen automatischen sowie manuellen Steuerungsmodus mit dynamischer UI-Anpassung (Hell/Dunkel-Theme).
 
-void handleRoot() {
-  bool nightMode = autoMode ? dunkel : manualNightMode;
+---
 
-  // Dynamisches UI-Styling basierend auf dem Modus
-  String bg = nightMode ? "#0f172a" : "#f1f5f9";
-  String card = nightMode ? "#1e293b" : "#ffffff";
-  String text = nightMode ? "#ffffff" : "#111827";
+## 3. Theorie
 
-  String html = "<!DOCTYPE html><html><head>";
-  html += "<meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>";
-  html += "<meta http-equiv='refresh' content='2'>"; // Auto-Refresh alle 2s
-  html += "<style>";
-  html += "body{font-family:Arial; background:" + bg + "; color:" + text + "; padding:20px; transition:0.3s;}";
-  html += ".card{background:" + card + "; padding:20px; border-radius:20px; max-width:420px; margin:auto; box-shadow:0 0 20px rgba(0,0,0,0.2);}";
-  html += ".item{margin:15px 0; font-size:20px;}";
-  html += ".badge{padding:6px 12px; border-radius:10px; color:white; font-weight:bold;}";
-  html += ".red{background:#dc2626;} .green{background:#16a34a;} .blue{background:#2563eb;} .orange{background:#f59e0b;}";
-  html += ".btn{display:inline-block; padding:12px 18px; margin:8px; border-radius:12px; text-decoration:none; color:white; font-weight:bold;}";
-  html += ".on{background:#2563eb;} .off{background:#f59e0b;} .auto{background:#16a34a;}";
-  html += "</style></head><body>";
+### ESP-NOW Protokoll
+ESP-NOW ist ein von Espressif entwickeltes verbindungsloses Kommunikationsprotokoll, das auf der 2,4-GHz-Frequenz arbeitet. Es überspringt den zeit- und energieaufwendigen Handshake-Prozess eines Standard-Wi-Fi-Verbindungsaufbaus. Dadurch können Datenpakete extrem schnell und mit minimalem Strombedarf direkt von einem Mikrocontroller zum anderen übertragen werden.
 
-  html += "<div class='card'><h1>ESP32 SENSOR</h1>";
-  html += "<div class='item'>Lichtwert: <b>" + String(licht) + "</b></div>";
-  
-  html += "<div class='item'>Objekt erkannt: ";
-  html += objekt ? "<span class='badge red'>JA</span>" : "<span class='badge green'>NEIN</span>";
-  html += "</div>";
+### Sensorik und Signalverarbeitung
+1. **LDR-Lichtsensor (Fotowiderstand):** Liefert ein analoges Signal basierend auf der Umgebungshelligkeit. Um Signalrauschen zu minimieren, wird im Code ein gleitender Mittelwertfilter über 10 Samples angewendet.
+2. **Infrarot-Näherungssensor (IR):** Arbeitet digital als *Active-Low*-Sensor. Sobald sich ein Objekt im Sichtfeld befindet, schaltet der Pin auf `LOW`.
+3. **RGB-LED (Common Anode):** Da die LED eine gemeinsame Anode besitzt, wird sie invertiert angesteuert (`255 - Farbwert`).
 
-  html += "<div class='item'>Modus: ";
-  html += nightMode ? "<span class='badge blue'>NACHT</span>" : "<span class='badge orange'>HELL</span>";
-  html += "</div>";
+---
 
-  html += "<div class='item'>Steuerung: ";
-  html += autoMode ? "<span class='badge green'>AUTO</span>" : "<span class='badge blue'>MANUELL</span>";
-  html += "</div>";
+## 4. Arbeitsschritte & Hardware-Aufbau
 
-  html += "<div class='item'>";
-  html += "<a class='btn auto' href='/auto'>AUTO</a>";
-  html += "<a class='btn on' href='/nighton'>NACHT EIN</a>";
-  html += "<a class='btn off' href='/nightoff'>NACHT AUS</a>";
-  html += "</div>";
+### Pinbelegung
 
-  html += "<div class='item'>Sleep: " + String(sleepZeit) + " s</div></div></body></html>";
+* **Sender-Knoten (ESP1):**
+  * Analoger Lichtsensor &rarr; **GPIO 34** (Analog INPUT)
+  * Infrarot-Sensor (IR) &rarr; **GPIO 27** (Digital INPUT)
+  * RGB-LED (Rot) &rarr; **GPIO 22** (OUTPUT)
+  * RGB-LED (Grün) &rarr; **GPIO 21** (OUTPUT)
+  * RGB-LED (Blau) &rarr; **GPIO 16** (OUTPUT)
+* **Empfänger-Knoten (ESP2):**
+  * Konfiguriert als Soft-AP (Hotspot) zur Bereitstellung des Webservers.
 
-  server.send(200, "text/html", html);
-}
+---
 
-void handleAuto() { autoMode = true; server.sendHeader("Location", "/"); server.send(303); }
-void handleNightOn() { autoMode = false; manualNightMode = true; server.sendHeader("Location", "/"); server.send(303); }
-void handleNightOff() { autoMode = false; manualNightMode = false; server.sendHeader("Location", "/"); server.send(303); }
+## 5. Systemfunktionen & UI-Betrieb
 
-void setup() {
-  Serial.begin(115200);
-  delay(1000);
+Das System arbeitet hochgradig adaptiv. Die Webseite passt ihr Farbschema automatisch der realen Umgebung oder der manuellen Benutzervorgabe an:
 
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(ssid, password);
-  Serial.print("IP: "); Serial.println(WiFi.softAPIP());
+### Lokale Aktorik-Logik (Sender-Knoten)
+* **Zustand "Hell":** Die RGB-LED leuchtet dauerhaft **Gelb**.
+* **Zustand "Dunkel" (Lichtwert &ge; 200):** Die RGB-LED wechselt auf **Blau**.
+* **Ereignis "Objekt erkannt":** Unabhängig von der Helligkeit unterbricht die LED ihren Zustand und **blinkt zweimal kurz**, um Aufmerksamkeit zu generieren.
 
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("ESP NOW FEHLER");
-    return;
-  }
+### Webinterface-Ansichten (Empfänger-Knoten)
+* **Automatischer Modus:** Der Webserver wertet den Flag `dunkel` aus. Ist es dunkel, schaltet die Seite ins dunkle CSS-Theme (`#0f172a`), ist es hell, wechselt das Dashboard in das helle CSS-Theme (`#f1f5f9`).
+* **Manueller Modus:** Über die Buttons `NACHT EIN` und `NACHT AUS` kann das Verhalten der Anzeige vom User remote überschrieben werden.
 
-  esp_now_register_recv_cb(onReceive);
-  
-  server.on("/", handleRoot);
-  server.on("/auto", handleAuto);
-  server.on("/nighton", handleNightOn);
-  server.on("/nightoff", handleNightOff);
-  server.begin();
-  Serial.println("WEBSERVER READY");
-}
+---
 
-void loop() {
-  server.handleClient();
-  delay(2);
-}
+## 6. Komponenten & Prototypen-Aufbau
+
+### Komponentenliste
+* 2x ESP32 NodeMCU Modul
+* 1x Infrarot-Näherungssensor (Active-Low)
+* 1x LDR-Lichtsensor-Modul
+* 1x RGB-LED (Common Anode)
+* 3x Vorwiderstände für die LED-Kanäle
+* Breadboards und Jumper-Kabel
+
+### Fotos vom Versuchsaufbau
+> Die folgenden Bilder zeigen den physischen Breadboard-Aufbau des Senders mit der Verkabelung der Sensoren und der RGB-Status-LED.
+
+#### Hardware-Aufbau (Top-View)
+![Hardware Aufbau Top](hardware_top.jpeg)
+
+#### Hardware-Aufbau (Front-View)
+![Hardware Aufbau Front](hardware_front.jpeg)
