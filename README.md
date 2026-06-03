@@ -1,7 +1,7 @@
 # SYT-Projekt: Drahtlose Sensor-Erfassung & Smart-Aktorik via ESP-NOW
 
 **Verfasser:** Osman Güngür, Krystian Kluska 
-**Klasse:** [Eure Klasse eintragen, z.B. 4AHIT]  
+**Klasse:** 2CHIT  
 **Datum:** 26.05.2026  
 **Fach:** Systemtechnik (SYT)  
 
